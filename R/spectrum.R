@@ -1,10 +1,10 @@
 #' Spectrum: Fast Adaptive Spectral Clustering for Single and Multi-view Data
 #'
 #' Spectrum is a self-tuning spectral clustering method for single or multi-view data. Spectrum uses a new type of adaptive
-#' density aware kernel that strengthens local connections in the graph. For integrating multi-view data and reducing noise
-#' a tensor product graph data integration and diffusion procedure is used. Spectrum analyses eigenvector variance or distribution
-#' to determine the number of clusters. Spectrum is well suited for a wide range of data, including both Gaussian and non-Gaussian
-#' structures.
+#' density aware kernel that strengthens connections between points that share common nearest neighbours in the graph. 
+#' For integrating multi-view data and reducing noise a tensor product graph data integration and diffusion procedure is used. 
+#' Spectrum analyses eigenvector variance or distribution to determine the number of clusters. Spectrum is well suited for a wide 
+#' range of data, including both Gaussian and non-Gaussian structures.
 #'
 #' @param data Data frame or list of data frames: contains the data with samples as columns and rows as features. For multi-view data a list of dataframes is to be supplied with the samples in the same order.
 #' @param method Numerical value: 1 = default eigengap method (Gaussian clusters), 2 = multimodality gap method (Gaussian/ non-Gaussian clusters), 3 = no automatic method (see fixk param)
@@ -28,6 +28,11 @@
 #' @param clusteralg Character string: clustering algorithm for eigenvector matrix (GMM or km)
 #' @param FASP Logical flag: whether to use Fast Approximate Spectral Clustering (for v. high sample numbers)
 #' @param FASPk Numerical value: the number of centroids to compute when doing FASP
+#' @param krangemax Numerical value: the maximum K value to iterate towards when running a range of K
+#' @param runrange Logical flag: whether to run a range of K or not (default=FALSE), puts Kth results into Kth element of list
+#' @param diffusion_iters Numerical value: number of diffusion iterations for the graph (default=5)
+#' @param KNNs_p Numerical value: number of KNNs when making KNN graph (default=10)
+#' @param missing Logical flag: whether to impute missing data in multi-view analysis
 #'
 #' @return A list, containing: 
 #' 1) cluster assignments, in the same order as input data columns 
@@ -44,8 +49,9 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
                      kerneltype=c('density','stsc'),maxk=10,NN=3,NN2=7,
                      showpca=FALSE,showheatmap=FALSE,showdimred=FALSE,
                      visualisation=c('umap','tsne'),frac=2,thresh=7,
-                     fontsize=18,dotsize=3,tunekernel=TRUE,clusteralg='GMM',
-                     FASP=FALSE,FASPk=NULL,fixk=NULL){
+                     fontsize=18,dotsize=3,tunekernel=FALSE,clusteralg='GMM',
+                     FASP=FALSE,FASPk=NULL,fixk=NULL,krangemax=10,
+                     runrange=FALSE,diffusion_iters=4,KNNs_p=10,missing=FALSE){
   
   ###
   kerneltype <- match.arg(kerneltype)
@@ -63,6 +69,12 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
   if (is.null(FASPk) == TRUE & FASP == TRUE){
     stop("Error: FASP method requires a number of centroids to compute")
   }
+  if (runrange == TRUE & method == 3){
+    stop("Error: cannot run a range of K whilst method=3")
+  }
+  if (is.null(fixk) == TRUE & method == 3){
+    stop("Error: need to set the value of K using the fixk parameter for method 3")
+  }
   
   ### initial messages
   if (silent == FALSE){
@@ -70,13 +82,11 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
     message(paste('detected views:',length(datalist)))
     message(paste('method:',method))
     message(paste('kernel:',kerneltype))
-    if (FASP){
-      message(paste('FASP method: TRUE'))
-    }
   }
   
   ### if running FASP calculate the centroids
   if (FASP){
+    message('running with FASP data compression')
     cs <- kmeans(t(datalist[[1]]),centers=FASPk)
     csx <- cs$centers # these are the centroids to cluster
     cas <- cs$cluster # now samples are assigned to centroids
@@ -109,15 +119,23 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
           NN <- 3
         }
       }
-      kerneli <- CNN_kernel_mine_b(datalist[[platform]],NN=NN,NN2=7)
+      kerneli <- CNN_kernel(datalist[[platform]],NN=NN,NN2=7)
     }
     if (silent == FALSE){
       message('done.')
     }
     ### save kernel in list
-    colnames(kerneli) <- colnames(datalist[[1]])
-    row.names(kerneli) <- colnames(datalist[[1]])
+    colnames(kerneli) <- colnames(datalist[[platform]])
+    row.names(kerneli) <- colnames(datalist[[platform]])
     kernellist[[platform]] <- kerneli
+  }
+  
+  ### impute missing data
+  if (missing){
+    message('imputing missing data...')
+    kernellist <- harmonise_ids(kernellist)
+    kernellist <- mean_imputation(kernellist)
+    message('done.')
   }
   
   ### fuse and truncate/ make KNN graph (both)
@@ -130,7 +148,7 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
   if (diffusion == TRUE){
     ## get KNN graph
     for (col in seq(1,ncol(A))){
-      KNNs <- head(rev(sort(A[,col])),(10+1)) # find the KNNs (10 default)
+      KNNs <- head(rev(sort(A[,col])),(KNNs_p+1)) # find the KNNs (10 default)
       tokeep <- names(KNNs)
       A[!(names(A[,col])%in%tokeep),col] <- 0
     }
@@ -146,7 +164,7 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
     im <- matrix(ncol=ncol(A),nrow=ncol(A))
     im[is.na(im)] <- 0
     diag(im) <- 1
-    for (t in seq(2,5)){ # (5)
+    for (t in seq(1,diffusion_iters)){ # diffusion_iterations (4 default)
       Qt <- A%*%Qt%*%t(A)+im
     }
     A2 <- t(Qt)
@@ -214,89 +232,152 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
     optk <- fixk
   } 
   
-  ### select optimal eigenvectors
-  xi <- decomp$vectors[,1:optk]
-  # normalise rows
-  yi <- xi/sqrt(rowSums(xi^2))
-  # replace NA values (row = 0) with zeros
-  yi[which(!is.finite(yi))] <- 0
-  
-  if (clusteralg == 'GMM'){
-    ### GMM
-    if (silent == FALSE){
-      message('doing GMM clustering...')
+  ## cluster either a range of K or just optimal K
+  results <- list()
+  if (runrange){
+    for (tk in seq(2,krangemax)){
+      # get range of k results
+      ### select optimal eigenvectors
+      xi <- decomp$vectors[,1:tk]
+      # normalise rows
+      yi <- xi/sqrt(rowSums(xi^2))
+      # replace NA values (row = 0) with zeros
+      yi[which(!is.finite(yi))] <- 0
+      
+      if (clusteralg == 'GMM'){
+        ### GMM
+        #if (silent == FALSE){
+        #  message('doing GMM clustering...')
+        #}
+        gmm <- ClusterR::GMM(yi, tk, verbose = F, seed_mode = "random_spread") # use random spread          
+        pr <- ClusterR::predict_GMM(yi, gmm$centroids, gmm$covariance_matrices, gmm$weights)
+        names(pr)[3] <- 'cluster'
+        if (0 %in% pr$cluster){
+          pr$cluster <- pr$cluster+1
+        }
+        if (silent == FALSE){
+          message('clustered.')
+        }
+      }else if (clusteralg == 'km'){
+        ### k means
+        #if (silent == FALSE){
+        #  message('doing k means clustering...')
+        #}
+        pr <- kmeans(yi, tk)
+        if (silent == FALSE){
+          message('clustered.')
+        }
+      }
+      #
+      if (showres == TRUE){ # for any number of data sources
+        if (showheatmap == TRUE){
+          displayClusters(A2,group=pr$cluster,fsize=1)
+        }
+      }
+      #
+      if (method != 3){
+        if (FASP){
+          ### if running FASP assign original samples to centroid clusters
+          casn <- cas
+          casn <- casn[seq_along(casn)] <- pr$cluster[as.numeric(casn[seq_along(casn)])]
+          names(casn) <- names(cas) 
+          ### return results
+          results[[tk]] <- list('allsample_assignments'=casn,'centroid_assignments'=pr$cluster,
+                          'eigenvector_analysis'=d,'K'=tk,'similarity_matrix'=A2,
+                          'eigendecomposition'=decomp)
+        }else{
+          ### return results
+          results[[tk]] <- list('assignments'=pr$cluster,'eigenvector_analysis'=d,
+                          'K'=tk,'similarity_matrix'=A2,'eigendecomposition'=decomp)
+        }
+      }
     }
-    gmm <- ClusterR::GMM(yi, optk, verbose = F, seed_mode = "random_spread") # use random spread          
-    pr <- ClusterR::predict_GMM(yi, gmm$centroids, gmm$covariance_matrices, gmm$weights)
-    names(pr)[3] <- 'cluster'
-    if (0 %in% pr$cluster){
-      pr$cluster <- pr$cluster+1
+  }else{
+    # just optimal k/ forced k
+    ### select optimal eigenvectors
+    xi <- decomp$vectors[,1:optk]
+    # normalise rows
+    yi <- xi/sqrt(rowSums(xi^2))
+    # replace NA values (row = 0) with zeros
+    yi[which(!is.finite(yi))] <- 0
+    
+    if (clusteralg == 'GMM'){
+      ### GMM
+      if (silent == FALSE){
+        message('doing GMM clustering...')
+      }
+      gmm <- ClusterR::GMM(yi, optk, verbose = F, seed_mode = "random_spread") # use random spread          
+      pr <- ClusterR::predict_GMM(yi, gmm$centroids, gmm$covariance_matrices, gmm$weights)
+      names(pr)[3] <- 'cluster'
+      if (0 %in% pr$cluster){
+        pr$cluster <- pr$cluster+1
+      }
+      if (silent == FALSE){
+        message('done.')
+      }
+    }else if (clusteralg == 'km'){
+      ### k means
+      if (silent == FALSE){
+        message('doing k means clustering...')
+      }
+      pr <- kmeans(yi, optk)
+      if (silent == FALSE){
+        message('done.')
+      }
     }
-    if (silent == FALSE){
-      message('done.')
+    
+    ### display clusters using heatmap and tsne
+    if (showres == TRUE){ # for any number of data sources
+      if (showheatmap == TRUE){
+        displayClusters(A2,group=pr$cluster,fsize=1)
+      }
+      if (showdimred == TRUE && visualisation == 'umap'){ # method 1
+        message('running UMAP on similarity...')
+        umap(A2,labels=as.factor(pr$cluster),axistextsize=fontsize,legendtextsize=fontsize,dotsize=dotsize)
+        message('done.')
+      }
+      if (showdimred == TRUE && visualisation == 'tsne'){ # method 2
+        message('running t-SNE on similarity...')
+        tsne(A2,labels=as.factor(pr$cluster),axistextsize=fontsize,legendtextsize=fontsize,dotsize=dotsize)
+        message('done.')
+      }
     }
-  }else if (clusteralg == 'km'){
-    ### k means
-    if (silent == FALSE){
-      message('doing k means clustering...')
+    if (length(datalist) == 1 && showres == TRUE){ # for one data source only
+      if (showpca == TRUE){
+        pca(datalist[[1]],labels=as.factor(pr$cluster),axistextsize=fontsize,legendtextsize=fontsize,dotsize=dotsize)
+      }
     }
-    pr <- kmeans(yi, optk)
-    if (silent == FALSE){
-      message('done.')
-    }
-  }
-  
-  ### display clusters using heatmap and tsne
-  if (showres == TRUE){ # for any number of data sources
-    if (showheatmap == TRUE){
-      displayClusters(A2,group=pr$cluster,fsize=1)
-    }
-    if (showdimred == TRUE && visualisation == 'umap'){ # method 1
-      message('running UMAP on similarity...')
-      umap(A2,labels=as.factor(pr$cluster),axistextsize=fontsize,legendtextsize=fontsize,dotsize=dotsize)
-      message('done.')
-    }
-    if (showdimred == TRUE && visualisation == 'tsne'){ # method 2
-      message('running t-SNE on similarity...')
-      tsne(A2,labels=as.factor(pr$cluster),axistextsize=fontsize,legendtextsize=fontsize,dotsize=dotsize)
-      message('done.')
-    }
-  }
-  if (length(datalist) == 1 && showres == TRUE){ # for one data source only
-    if (showpca == TRUE){
-      pca(datalist[[1]],labels=as.factor(pr$cluster),axistextsize=fontsize,legendtextsize=fontsize,dotsize=dotsize)
-    }
-  }
-  
-  if (method != 3){
-    if (FASP){
-      ### if running FASP assign original samples to centroid clusters
-      casn <- cas
-      casn <- casn[seq_along(casn)] <- pr$cluster[as.numeric(casn[seq_along(casn)])]
-      names(casn) <- names(cas) 
-      ### return results
-      results <- list('allsample_assignments'=casn,'centroid_assignments'=pr$cluster,
-                      'eigenvector_analysis'=d,'K'=optk,'similarity_matrix'=A2,
-                      'eigendecomposition'=decomp)
-    }else{
-      ### return results
-      results <- list('assignments'=pr$cluster,'eigenvector_analysis'=d,
-                      'K'=optk,'similarity_matrix'=A2,'eigendecomposition'=decomp)
-    }
-  }else if (method == 3){
-    if (FASP){
-      ### if running FASP assign original samples to centroid clusters
-      casn <- cas
-      casn <- casn[seq_along(casn)] <- pr$cluster[as.numeric(casn[seq_along(casn)])]
-      names(casn) <- names(cas) 
-      ### return results
-      results <- list('allsample_assignments'=casn,'centroid_assignments'=pr$cluster,
-                      'K'=optk,'similarity_matrix'=A2,
-                      'eigendecomposition'=decomp)
-    }else{
-      ### return results
-      results <- list('assignments'=pr$cluster,
-                      'K'=optk,'similarity_matrix'=A2,'eigendecomposition'=decomp)
+    
+    if (method != 3){
+      if (FASP){
+        ### if running FASP assign original samples to centroid clusters
+        casn <- cas
+        casn <- casn[seq_along(casn)] <- pr$cluster[as.numeric(casn[seq_along(casn)])]
+        names(casn) <- names(cas) 
+        ### return results
+        results <- list('allsample_assignments'=casn,'centroid_assignments'=pr$cluster,
+                        'eigenvector_analysis'=d,'K'=optk,'similarity_matrix'=A2,
+                        'eigendecomposition'=decomp)
+      }else{
+        ### return results
+        results <- list('assignments'=pr$cluster,'eigenvector_analysis'=d,
+                        'K'=optk,'similarity_matrix'=A2,'eigendecomposition'=decomp)
+      }
+    }else if (method == 3){
+      if (FASP){
+        ### if running FASP assign original samples to centroid clusters
+        casn <- cas
+        casn <- casn[seq_along(casn)] <- pr$cluster[as.numeric(casn[seq_along(casn)])]
+        names(casn) <- names(cas) 
+        ### return results
+        results <- list('allsample_assignments'=casn,'centroid_assignments'=pr$cluster,
+                        'K'=optk,'similarity_matrix'=A2,
+                        'eigendecomposition'=decomp)
+      }else{
+        ### return results
+        results <- list('assignments'=pr$cluster,
+                        'K'=optk,'similarity_matrix'=A2,'eigendecomposition'=decomp)
+      }
     }
   }
   
@@ -306,5 +387,4 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
   
   return(results)
 }
-  
 

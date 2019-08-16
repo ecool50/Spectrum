@@ -2,7 +2,7 @@
 
 if(getRversion() >= "2.15.1")  utils::globalVariables(c('K','PC1','PC2','X1','X2','Z','evals','x'))
 
-#' CNN_kernel_mine_b: fast adaptive density aware kernel
+#' CNN_kernel: fast adaptive density aware kernel
 #'
 #' @param mat Matrix: matrix should have samples as columns and rows as features
 #' @param NN Numerical value: the number of nearest neighbours to use when calculating local sigma
@@ -12,8 +12,8 @@ if(getRversion() >= "2.15.1")  utils::globalVariables(c('K','PC1','PC2','X1','X2
 #' @export
 #'
 #' @examples
-#' CNN_kern <- CNN_kernel_mine_b(blobs[,1:50])
-CNN_kernel_mine_b <- function(mat, NN = 3, NN2 = 7) {
+#' CNN_kern <- CNN_kernel(blobs[,1:50])
+CNN_kernel <- function(mat, NN = 3, NN2 = 7) {
   n <- ncol(mat)
   ## need N nearest neighbour distance per sample (kn), 
   ## and names of NN2 nearest neigbours (nbs)
@@ -280,7 +280,7 @@ kernfinder_mine <- function(data,maxk=10,fontsize=fontsize,silent=silent,
     if (silent == FALSE){
       message(paste('tuning kernel NN parameter:',param))
     }
-    kern <- CNN_kernel_mine_b(data,NN=param,NN2=7)
+    kern <- CNN_kernel(data,NN=param,NN2=7)
     kern[which(!is.finite(kern))] <- 0 # deal with possible NaNs
     ## calculate difference between most multimodal eigenvectors and background
     dv <- 1/sqrt(rowSums(kern)) # D = diag(1/sqrt(rowSums(A)))
@@ -439,7 +439,7 @@ plot_multigap <- function(d,fontsize=fontsize,width=26,maxk=maxk,
 kernel_pca <- function(datam, labels = FALSE, axistextsize = 18, legendtextsize = 18, dotsize = 3,
                        kernel = TRUE){
   if (kernel == FALSE){
-    km <- CNN_kernel_mine_b(datam)
+    km <- CNN_kernel(datam)
   }else{
     km <- datam
   }
@@ -467,4 +467,74 @@ kernel_pca <- function(datam, labels = FALSE, axistextsize = 18, legendtextsize 
   print(p1)
   #
   return(p1)
+}
+
+### harmonise ids between platforms
+harmonise_ids <- function(l){
+  ### harmonise column IDs
+  ### if missing == TRUE run at start of code
+  # takes list of data frames at input and adds new columns
+  # if they are missing in any view compared with all IDs
+  # fills extra columns with NA for mean imputation later
+  ## get list of ids missing for each platform
+  allids <- c()
+  for (view in seq(1,length(l))){
+    allids <- c(allids,colnames(l[[view]]))
+  }
+  allids <- unique(allids)
+  l2 <- list()
+  for (view in seq(1,length(l))){
+    l2[[view]] <- setdiff(allids,colnames(l[[view]]))
+  }
+  ## add ids to each platform, get in correct order
+  for (view in seq(1,length(l))){
+    namevector <- l2[[view]]
+    if (length(namevector) == 0){
+      namevector <- c()
+    }
+    # NXN so require column + row to be added
+    ln <- matrix(ncol=length(namevector),nrow=nrow(l[[view]]))
+    row.names(ln) <- row.names(l[[view]])
+    colnames(ln) <- namevector
+    l[[view]] <- cbind(l[[view]],ln)
+    #
+    ln2 <- matrix(nrow=length(namevector),ncol=ncol(l[[view]]))
+    row.names(ln2) <- namevector
+    colnames(ln2) <- c(row.names(ln),namevector)
+    l[[view]] <- rbind(l[[view]],ln2)
+    # sort both
+    l[[view]] <- l[[view]][allids,allids]
+  }
+  return(l)
+}
+
+### impute
+mean_imputation <- function(l){
+  ### mean imputation
+  ### if missing == TRUE run after individual
+  ### kernel calculation
+  # takes list of similarity matrices as input
+  # imputes missing values with the mean of the other
+  # views
+  N <- length(l)
+  ## get missing indices of matrix
+  missing <- c()
+  for (i in seq(1,length(l))){
+    if (any(is.na(l[[i]]))){
+      missing <- c(missing,i)
+    }
+  }
+  ## for N
+  l <- lapply(l, function(x) {if(any(class(x)=="data.frame")) as.matrix(x) else x})
+  mn <- seq(1,N)
+  for (mm in missing){
+    # make a list of everything but missing matrix and take mean matrix
+    X <- l[-mm]
+    Y <- do.call(cbind, X)
+    Y <- array(Y, dim=c(dim(X[[1]]), length(X)))
+    Z <- apply(Y, c(1, 2), mean, na.rm = TRUE)
+    # replace NA with mean
+    l[[mm]][is.na(l[[mm]])] <- Z[is.na(l[[mm]])]
+  }
+  return(l)
 }
