@@ -14,7 +14,7 @@ Spectrum(data, method = 1, silent = FALSE, showres = TRUE,
   KNNs_p = 10, missing = FALSE)
 }
 \arguments{
-\item{data}{Data frame or list of data frames: contains the data with samples as columns and rows as features. For multi-view data a list of dataframes is to be supplied with the samples in the same order.}
+\item{data}{Data frame or list of data frames: contains the data with points to cluster as columns and rows as features. For multi-view data a list of dataframes is to be supplied with the samples in the same order.}
 
 \item{method}{Numerical value: 1 = default eigengap method (Gaussian clusters), 2 = multimodality gap method (Gaussian/ non-Gaussian clusters), 3 = no automatic method (see fixk param)}
 
@@ -22,13 +22,13 @@ Spectrum(data, method = 1, silent = FALSE, showres = TRUE,
 
 \item{showres}{Logical flag: whether to show the results on the screen}
 
-\item{diffusion}{Logical flag: whether to perform graph diffusion to reduce noise, recommended for method 1 only}
+\item{diffusion}{Logical flag: whether to perform graph diffusion to reduce noise (default=TRUE)}
 
 \item{kerneltype}{Character string: 'density' (default) = adaptive density aware kernel, 'stsc' = Zelnik-Manor self-tuning kernel}
 
-\item{maxk}{Numerical value: the maximum number of expected clusters (default  = 10). This is data dependent, do not set excessively high.}
+\item{maxk}{Numerical value: the maximum number of expected clusters (default=10). This is data dependent, do not set excessively high.}
 
-\item{NN}{Numerical value: kernel param, the number of nearest neighbours to use sigma parameters (default = 3)}
+\item{NN}{Numerical value: kernel param, the number of nearest neighbours to use sigma parameters (default=3)}
 
 \item{NN2}{Numerical value: kernel param, the number of nearest neighbours to use for the common nearest neigbours (default = 7)}
 
@@ -48,7 +48,7 @@ Spectrum(data, method = 1, silent = FALSE, showres = TRUE,
 
 \item{dotsize}{Numerical value: controls the dot size of the ggplot2 plots}
 
-\item{tunekernel}{Logical flag: whether to tune the kernel, only applies for method 2}
+\item{tunekernel}{Logical flag: whether to tune the kernel, only applies for method 2 (default=FALSE)}
 
 \item{clusteralg}{Character string: clustering algorithm for eigenvector matrix (GMM or km)}
 
@@ -62,11 +62,11 @@ Spectrum(data, method = 1, silent = FALSE, showres = TRUE,
 
 \item{runrange}{Logical flag: whether to run a range of K or not (default=FALSE), puts Kth results into Kth element of list}
 
-\item{diffusion_iters}{Numerical value: number of diffusion iterations for the graph (default=5)}
+\item{diffusion_iters}{Numerical value: number of diffusion iterations for the graph (default=4)}
 
-\item{KNNs_p}{Numerical value: number of KNNs when making KNN graph (default=10)}
+\item{KNNs_p}{Numerical value: number of KNNs when making KNN graph (default=10, suggested=10-20)}
 
-\item{missing}{Logical flag: whether to impute missing data in multi-view analysis}
+\item{missing}{Logical flag: whether to impute missing data in multi-view analysis (default=FALSE)}
 }
 \value{
 A list, containing: 
@@ -78,7 +78,7 @@ A list, containing:
 }
 \description{
 Spectrum is a self-tuning spectral clustering method for single or multi-view data. Spectrum uses a new type of adaptive
-density aware kernel that strengthens connections between points that share common nearest neighbours in the graph. 
+density-aware kernel that strengthens connections between points that share common nearest neighbours in the graph. 
 For integrating multi-view data and reducing noise a tensor product graph data integration and diffusion procedure is used. 
 Spectrum analyses eigenvector variance or distribution to determine the number of clusters. Spectrum is well suited for a wide 
 range of data, including both Gaussian and non-Gaussian structures.

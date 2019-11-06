@@ -32,4 +32,24 @@
 #' @format A data frame with 2 rows and 540 variables
 "circles"
 
+#' A list of the blob data as similarity matrices with
+#' a missing entry in one
+#'
+#' Two copies of a simulated dataset of 8 Gaussian blobs in a 
+#' list converted to a similarity matrix, but one has a 
+#' missing observation.
+#'
+#' @format A list of two data frames
+"missl"
+
+#' A list of the blob data as similarity matrices with
+#' a missing entry in one filled with NAs
+#'
+#' Two copies of a simulated dataset of 8 Gaussian blobs in a 
+#' list converted to a similarity matrix, but one has a 
+#' missing observation filled with NAs.
+#'
+#' @format A list of two data frames
+"misslfilled"
+
 

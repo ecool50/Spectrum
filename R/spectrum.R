@@ -1,20 +1,20 @@
 #' Spectrum: Fast Adaptive Spectral Clustering for Single and Multi-view Data
 #'
 #' Spectrum is a self-tuning spectral clustering method for single or multi-view data. Spectrum uses a new type of adaptive
-#' density aware kernel that strengthens connections between points that share common nearest neighbours in the graph. 
+#' density-aware kernel that strengthens connections between points that share common nearest neighbours in the graph. 
 #' For integrating multi-view data and reducing noise a tensor product graph data integration and diffusion procedure is used. 
 #' Spectrum analyses eigenvector variance or distribution to determine the number of clusters. Spectrum is well suited for a wide 
 #' range of data, including both Gaussian and non-Gaussian structures.
 #'
-#' @param data Data frame or list of data frames: contains the data with samples as columns and rows as features. For multi-view data a list of dataframes is to be supplied with the samples in the same order.
+#' @param data Data frame or list of data frames: contains the data with points to cluster as columns and rows as features. For multi-view data a list of dataframes is to be supplied with the samples in the same order.
 #' @param method Numerical value: 1 = default eigengap method (Gaussian clusters), 2 = multimodality gap method (Gaussian/ non-Gaussian clusters), 3 = no automatic method (see fixk param)
-#' @param maxk Numerical value: the maximum number of expected clusters (default  = 10). This is data dependent, do not set excessively high.
+#' @param maxk Numerical value: the maximum number of expected clusters (default=10). This is data dependent, do not set excessively high.
 #' @param fixk Numerical value: if we are just performing spectral clustering without automatic selection of K, set this parameter and method to 3
 #' @param silent Logical flag: whether to turn off messages
 #' @param showres Logical flag: whether to show the results on the screen
-#' @param diffusion Logical flag: whether to perform graph diffusion to reduce noise, recommended for method 1 only
+#' @param diffusion Logical flag: whether to perform graph diffusion to reduce noise (default=TRUE)
 #' @param kerneltype Character string: 'density' (default) = adaptive density aware kernel, 'stsc' = Zelnik-Manor self-tuning kernel
-#' @param NN Numerical value: kernel param, the number of nearest neighbours to use sigma parameters (default = 3)
+#' @param NN Numerical value: kernel param, the number of nearest neighbours to use sigma parameters (default=3)
 #' @param NN2 Numerical value: kernel param, the number of nearest neighbours to use for the common nearest neigbours (default = 7)
 #' @param showpca Logical flag: whether to show pca when running on one view
 #' @param showheatmap Logical flag: whether to show heatmap of similarity matrix when running on one view
@@ -24,15 +24,15 @@
 #' @param thresh Numerical value: optk search param, how many points ahead to keep searching (multimodality gap method param)
 #' @param fontsize Numerical value: controls font size of the ggplot2 plots
 #' @param dotsize Numerical value: controls the dot size of the ggplot2 plots
-#' @param tunekernel Logical flag: whether to tune the kernel, only applies for method 2
+#' @param tunekernel Logical flag: whether to tune the kernel, only applies for method 2 (default=FALSE)
 #' @param clusteralg Character string: clustering algorithm for eigenvector matrix (GMM or km)
 #' @param FASP Logical flag: whether to use Fast Approximate Spectral Clustering (for v. high sample numbers)
 #' @param FASPk Numerical value: the number of centroids to compute when doing FASP
 #' @param krangemax Numerical value: the maximum K value to iterate towards when running a range of K
 #' @param runrange Logical flag: whether to run a range of K or not (default=FALSE), puts Kth results into Kth element of list
-#' @param diffusion_iters Numerical value: number of diffusion iterations for the graph (default=5)
-#' @param KNNs_p Numerical value: number of KNNs when making KNN graph (default=10)
-#' @param missing Logical flag: whether to impute missing data in multi-view analysis
+#' @param diffusion_iters Numerical value: number of diffusion iterations for the graph (default=4)
+#' @param KNNs_p Numerical value: number of KNNs when making KNN graph (default=10, suggested=10-20)
+#' @param missing Logical flag: whether to impute missing data in multi-view analysis (default=FALSE)
 #'
 #' @return A list, containing: 
 #' 1) cluster assignments, in the same order as input data columns 
@@ -98,15 +98,13 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
   for (platform in seq(1,length(datalist))){
     ### calculate kernel
     if (silent == FALSE){
-      message(paste('calculating kernel',platform))
+      message(paste('calculating similarity matrix',platform))
     }
     if (kerneltype == 'stsc'){
       if (method == 2){
         if (tunekernel){
           NN <- kernfinder_local(datalist[[platform]],maxk=maxk,silent=silent,fontsize=fontsize,
                                  dotsize=dotsize,showres=showres)
-        }else{
-          NN <- 3
         }
       }
       kerneli <- rbfkernel_b(datalist[[platform]],K=NN,sigma=1)
@@ -115,8 +113,6 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
         if (tunekernel){
           NN <- kernfinder_mine(datalist[[platform]],maxk=maxk,silent=silent,
                                 showres=showres,fontsize=fontsize,dotsize=dotsize)
-        }else{
-          NN <- 3
         }
       }
       kerneli <- CNN_kernel(datalist[[platform]],NN=NN,NN2=7)
@@ -140,11 +136,11 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
   
   ### fuse and truncate/ make KNN graph (both)
   if (silent == FALSE){
-    message('combining kernels if > 1 and making KNN graph...')
+    message('combining similarity matrices if > 1 and making kNN graph...')
   }
   A <- Reduce('+', kernellist) # construct A by linear combination
   
-  ### diffusion on KNN graph
+  ### diffusion on TPG using the Shu algorithm
   if (diffusion == TRUE){
     ## get KNN graph
     for (col in seq(1,ncol(A))){
@@ -158,7 +154,7 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
     }
     ## diffusion iterations
     if (silent == FALSE){
-      message('diffusing on tensor graph...')
+      message('diffusing on tensor product graph...')
     }
     Qt <- A
     im <- matrix(ncol=ncol(A),nrow=ncol(A))
@@ -179,7 +175,7 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
   
   ### calculate graph Laplacian of A2 (both)
   if (silent == FALSE){
-    message('calculating graph laplacian...')
+    message('calculating graph laplacian (L)...')
   }
   dv <- 1/sqrt(rowSums(A2))
   l <- dv * A2 %*% diag(dv)
@@ -187,7 +183,7 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
   ### eigengap heuristic
   if (method == 1){
     if (silent == FALSE){
-      message('getting eigendecomposition of L...')
+      message('getting eigensystem of L...')
     }
     decomp <- eigen(l)
     if (silent == FALSE){
@@ -209,7 +205,7 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
     }
   }else if (method == 2){ # multimodality gap heuristic
     if (silent == FALSE){
-      message('getting eigendecomposition of L...')
+      message('getting eigensystem of L...')
     }
     decomp <- eigen(l)
     if (silent == FALSE){
@@ -246,9 +242,6 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
       
       if (clusteralg == 'GMM'){
         ### GMM
-        #if (silent == FALSE){
-        #  message('doing GMM clustering...')
-        #}
         gmm <- ClusterR::GMM(yi, tk, verbose = F, seed_mode = "random_spread") # use random spread          
         pr <- ClusterR::predict_GMM(yi, gmm$centroids, gmm$covariance_matrices, gmm$weights)
         names(pr)[3] <- 'cluster'
@@ -260,9 +253,6 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
         }
       }else if (clusteralg == 'km'){
         ### k means
-        #if (silent == FALSE){
-        #  message('doing k means clustering...')
-        #}
         pr <- kmeans(yi, tk)
         if (silent == FALSE){
           message('clustered.')
@@ -284,11 +274,11 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
           ### return results
           results[[tk]] <- list('allsample_assignments'=casn,'centroid_assignments'=pr$cluster,
                           'eigenvector_analysis'=d,'K'=tk,'similarity_matrix'=A2,
-                          'eigendecomposition'=decomp)
+                          'eigensystem'=decomp)
         }else{
           ### return results
           results[[tk]] <- list('assignments'=pr$cluster,'eigenvector_analysis'=d,
-                          'K'=tk,'similarity_matrix'=A2,'eigendecomposition'=decomp)
+                          'K'=tk,'similarity_matrix'=A2,'eigensystem'=decomp)
         }
       }
     }
@@ -318,7 +308,7 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
     }else if (clusteralg == 'km'){
       ### k means
       if (silent == FALSE){
-        message('doing k means clustering...')
+        message('doing k-means clustering...')
       }
       pr <- kmeans(yi, optk)
       if (silent == FALSE){
@@ -332,12 +322,12 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
         displayClusters(A2,group=pr$cluster,fsize=1)
       }
       if (showdimred == TRUE && visualisation == 'umap'){ # method 1
-        message('running UMAP on similarity...')
+        message('running UMAP on similarity matrix...')
         umap(A2,labels=as.factor(pr$cluster),axistextsize=fontsize,legendtextsize=fontsize,dotsize=dotsize)
         message('done.')
       }
       if (showdimred == TRUE && visualisation == 'tsne'){ # method 2
-        message('running t-SNE on similarity...')
+        message('running t-SNE on similarity matrix...')
         tsne(A2,labels=as.factor(pr$cluster),axistextsize=fontsize,legendtextsize=fontsize,dotsize=dotsize)
         message('done.')
       }
@@ -357,11 +347,11 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
         ### return results
         results <- list('allsample_assignments'=casn,'centroid_assignments'=pr$cluster,
                         'eigenvector_analysis'=d,'K'=optk,'similarity_matrix'=A2,
-                        'eigendecomposition'=decomp)
+                        'eigensystem'=decomp)
       }else{
         ### return results
         results <- list('assignments'=pr$cluster,'eigenvector_analysis'=d,
-                        'K'=optk,'similarity_matrix'=A2,'eigendecomposition'=decomp)
+                        'K'=optk,'similarity_matrix'=A2,'eigensystem'=decomp)
       }
     }else if (method == 3){
       if (FASP){
@@ -372,11 +362,11 @@ Spectrum <- function(data,method=1,silent=FALSE,showres=TRUE,diffusion=TRUE,
         ### return results
         results <- list('allsample_assignments'=casn,'centroid_assignments'=pr$cluster,
                         'K'=optk,'similarity_matrix'=A2,
-                        'eigendecomposition'=decomp)
+                        'eigensystem'=decomp)
       }else{
         ### return results
         results <- list('assignments'=pr$cluster,
-                        'K'=optk,'similarity_matrix'=A2,'eigendecomposition'=decomp)
+                        'K'=optk,'similarity_matrix'=A2,'eigensystem'=decomp)
       }
     }
   }
